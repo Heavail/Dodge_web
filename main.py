@@ -383,7 +383,7 @@ class Main:
         cannon_ball = {'image' : 'cannon_ball.png','size' : (10,10),'posbiasy' : 5,'posbiasx' : -50,'velocityx' : -1,'repeat' : True,'gap' : 300,'erasebefore' : 0,'damage' : True}
         cannon = {'image' : 'cannon.png','size' : (50,35),'posbiasx' : -50,'posbiasy' : -35,'flipx' : True,'shoot' : [cannon_ball],'repeat' : False}
         spikes = {'image' : 'spikes.png','size' : (204,19),'posbiasy' : -19,'posbiasx' : -504,'damage' : True}
-        fireball = {'image' : 'fireball.png','size' : (10,10),'posbiasy' : 10,'posbiasx' : -25,'velocityx' : -3,'repeat' : True,'gap' : 300,'erasebefore' : 0,'damage' : True}
+        fireball = {'image' : 'fireball.png','size' : (10,10),'posbiasy' : 10,'posbiasx' : -25,'velocityx' : -5,'repeat' : True,'gap' : 300,'erasebefore' : 0,'damage' : True}
         statue = {'image' : 'ancientdog_statue.png','size' : (25,50),'posbiasx' : -25,'posbiasy' : -50,'flipx' : True,'shoot' : [fireball],'repeat' : False}
         obstacle_list = [None]
         counts = 0
