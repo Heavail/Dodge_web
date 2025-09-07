@@ -4,14 +4,26 @@ import os
 import random
 import asyncio
 import time
+from collections import defaultdict
 
 highscore = 0
+pm.init()
+pm.mixer.init(frequency=44100, size=-16, channels=2, buffer=256)
+pm.mixer.set_num_channels(64)
+pm.mixer.set_reserved(4)
 
+CHANNEL_INDICES = list(range(4, 20))
+CHANNELS = [pm.mixer.Channel(i) for i in CHANNEL_INDICES]
+SOUND_INDEX = 0
+MUTE = False
 
 class Assets:
-    def __init__(self,screen,image = None,pos = None,size = None,velocity = (0,0), acceleration = (0,0),flipx = False,flipy = False):
+    DIRECTORIES = defaultdict(lambda : None)
+    def __init__(self,screen,image = None,pos = None,size = None,velocity = (0,0), acceleration = (0,0),flipx = False,flipy = False,soundfile = None,switch = False,switch_folder = None):
         self.velocity, self.acceleration = (velocity, acceleration)
         self.objects = {}
+        self.switch_folder = switch_folder
+        self.switch = False
         self.obstacle = False
         self.screen = screen
         self.fixed_size = size
@@ -26,6 +38,10 @@ class Assets:
         self.previous_size = None
         self._image = None
         self.image = image
+        self._soundfile = None
+        self.soundfile = soundfile
+        self.all_sounds = defaultdict(lambda :None)
+        self.prev_soundfile = None
         self.pos = pos
         self.folder_once = True
         if self._image:
@@ -33,6 +49,9 @@ class Assets:
             if self._size:
                 self.image_blit = pm.transform.scale(self.image_blit,size)
             self.width, self.height = (self.image_blit.get_width(),self.image_blit.get_height())
+        if self.switch_folder:
+            self.frame = os.listdir(f'assets/{self.switch_folder}')
+            self.image = f'{self.switch_folder}/{self.frame[0]}'
         
 
         pass
@@ -74,6 +93,7 @@ class Assets:
                 return True
             else:
                 return False
+            
     @property
     def size(self):
         return self._size
@@ -117,13 +137,27 @@ class Assets:
             self.velocity = (self.velocity[0] + self.acceleration[0] * dt, self.velocity[1] + self.acceleration[1] * dt)
             self.pos = (self.pos[0] + self.velocity[0] * dt,self.pos[1] + self.velocity[1] * dt)
             self.screen.blit(self.image_blit,self.pos)
+    @property
+    def soundfile(self):
+        return self._soundfile
+    @soundfile.setter
+    def soundfile(self,value):
+        self.prev_soundfile = self._soundfile
+        if self._soundfile != value:
+            self._soundfile = value
+            if value:
+                if not self.all_sounds[value]:
+                    self.all_sounds[value] = pm.mixer.Sound(f'assets/{self._soundfile}')
+                self.sound = self.all_sounds[value]
 
     def animate(self,folder,rate = 40,adjust_size = True,flip = False):
         self.rate = rate
         if self.folder_once == True:
             self._folder = folder
             self.folder_once = False
-        self.file_list = os.listdir(f'assets/{self._folder}')
+        if not Assets.DIRECTORIES[self.folder]:
+            Assets.DIRECTORIES[self.folder] = os.listdir(f'assets/{self.folder}')
+        self.file_list = Assets.DIRECTORIES[self.folder]
         if self.count == rate:
             self.frame_count += 1
             self.count = 0
@@ -135,7 +169,18 @@ class Assets:
             self.image_blit = pm.transform.flip(pm.image.load(self._image).convert_alpha(),flip_x = True,flip_y = False)
         
         self.count += 1
-
+    def change_switch(self):
+        mouse_pos = pm.mouse.get_pos()
+        self.image = f'{self.switch_folder}/{self.frame[self.frame_count]}'
+        if mouse_pos[0] > self.pos[0] and mouse_pos[0] < self.pos[0] + self.size[0] and mouse_pos[1] > self.pos[1] and mouse_pos[1] < self.pos[1] + self.size[1]:
+            self.frame_count += 1
+            if self.frame_count == len(self.frame):
+                self.frame_count = 0
+            self.image = f'{self.switch_folder}/{self.frame[self.frame_count]}'
+            if self.switch:
+                self.switch = False
+            else:
+                self.switch = True
 
 class Manager:
     def __init__(self, screen, image=None, repeat_pos=None, repeated=None, size=None):
@@ -180,7 +225,10 @@ class Manager:
             return asset,score
         else:
             return asset,self.ys
-    def repeat(self,gap,range_to,till,player = None,erase_before = None,velocity = 0,positions = None,dt = 1):
+    def repeat(self,gap,range_to,till,player = None,erase_before = None,velocity = 0,positions = None,dt = 1,soundfile = None):
+        global SOUND_INDEX
+        if SOUND_INDEX == 16:
+            SOUND_INDEX = 0
         if self.once_till == True:
             self.till = till
             self.till[0] = till[0]
@@ -195,6 +243,20 @@ class Manager:
                 object = self.repeated[count]
             except:
                 object = Assets(self.screen,image = self.image,size = self.size,pos = positions)
+                object.play_once = True
+                if soundfile and object.pos[0] > 0 and not MUTE:
+                    object.soundfile = soundfile
+                    channel = CHANNELS[SOUND_INDEX]
+                    if not channel.get_busy():
+                        channel.play(object.sound)
+                    SOUND_INDEX += 1
+                # counts = 0
+                # for i in range(64):
+                #     if not pm.mixer.Channel(i).get_busy():
+                #         counts += 1
+                
+                # print(counts)
+                
                 self.repeated.append(object)
             posx = self.till[0] + count * gap
             if not object.pos:
@@ -209,6 +271,7 @@ class Manager:
             object.velocity = (velocity,0)
             object.pos = pos
             object.show(dt = dt)
+            
             if player:
                 if object.mask_collision(player):
                     self.collisions.append(object)
@@ -216,7 +279,10 @@ class Manager:
             #     if posx < erase_before:
             #         self.repeated.remove(object)
             count += 1
-            if erase_before:
+            # if object.soundfile and object.pos[0] < 0 and object.channel:
+            #     object.channel.stop()
+            #     object.channel = None
+            if erase_before != None:
                 if object.pos[0] < erase_before:
                     self.till = [self.till[0] + gap,self.till[1]]
                     try:
@@ -227,12 +293,18 @@ class Manager:
         return self.repeated
         pass
 
+
 class Main:
     def __init__(self):
-        pm.init()
+        self.walking_sound = pm.mixer.Sound('assets/running.ogg')
+        self.sliding_sound = pm.mixer.Sound('assets/slide.ogg')
+        self.landed_sound = pm.mixer.Channel(0)
         screen_info = pm.display.Info()
         self._screenheight  = screen_info.current_h
         self._screenwidth = screen_info.current_w
+        self.screen = pm.display.set_mode((self._screenwidth,self._screenheight))
+        pm.display.set_caption('Dodge')
+        self.speaker = Assets(self.screen,pos = (self._screenwidth - 100, 50),size = (50,50),switch = True,switch_folder = 'speaker')
         self.groundy_list = [self.screenheight - 100,self.screenheight - 100,self.screenheight - 100]
         pass
     @property
@@ -269,14 +341,11 @@ class Main:
         pass
     async def main(self):
         print('working....')
+        global MUTE
         clock = pm.time.Clock()
-        global highscore
         scores = 0
+        global highscore
         death = False
-        pm.display.set_caption("DODGE")
-        self.screen = pm.display.set_mode((self._screenwidth,self._screenheight))
-        # icon = pm.image.load('ICON.png').convert_alpha()
-        # pm.display.set_icon(icon)
         player = Assets(self.screen,velocity = (0,0),pos = (50,50))
         player_flip = False
         landed = False
@@ -297,7 +366,11 @@ class Main:
         move_back = False
         slide = False
         Font = pm.font.SysFont("Courier New",30)
-        Font2 = pm.font.SysFont("Tahoma",30)
+        Font2 = pm.font.SysFont("Tahoma",20)
+        space = Font2.render('Press Space Key once to jump and double to double jump " "',True,(112,112,112))
+        right = Font2.render('Press Right Arrow Key to dash "→"',True,(112,112,112))
+        down = Font2.render('Press Down Arrow Key to slide "↓"',True,(112,112,112))
+        play_again = Font2.render('Click anywhere or press any key to play again..',True,(225,225,225))
         gr = {}
         ground = Manager(self.screen,image = 'land5.png',size = (self._screenwidth/2,200))
         grounds = []
@@ -305,9 +378,6 @@ class Main:
         ground_vel = 0
         background = Manager(self.screen,image = 'background.png',size = (self._screenwidth,self._screenheight))
         backgrounds = []
-        space = pm.transform.scale(Font2.render('Press Space Key once to jump and double to double jump " "',True,(112,112,112)),(self._screenwidth/2.5,30))
-        right = pm.transform.scale(Font2.render('Press Right Arrow Key to dash "→"',True,(112,112,112)),(self._screenwidth/4,25))
-        down = pm.transform.scale(Font2.render('Press Down Arrow Key to slide "↓"',True,(112,112,112)),(self._screenwidth/4,25))
         prev_time = time.time()
         def ground_interaction(player,i):
             nonlocal landed,launched,blocked
@@ -319,7 +389,7 @@ class Main:
             if player.objects[f'{i}'].left_collide == True and player.objects[f'{i}'].right_collide == False and i.pos[1] <= player.pos[1] + (player.height/2):
                 player.pos = (i.pos[0] + i.width,player.pos[1])
                 player.objects[f'{i}'].down_collide = False
-            if player.objects[f'{i}'].down_collide == True:
+            if player.objects[f'{i}'].down_collide == True and (i.pos[1] > player.pos[1] + (player.height/2) or i.pos[1] < player.pos[1] and player.pos[0] > i.pos[0] and player.pos[0] + player.width < i.pos[0] + i.width):
                 if launched == False:
                     # print(True)
                     landed = True
@@ -353,13 +423,18 @@ class Main:
                     obstacle.erasebefore = object.get('erasebefore',None)
                     obstacle.damage = object.get('damage',False)
                     obstacle.score = False
+                    obstacle.shotby = object.get('shotby',None)
+                    obstacle.soundfile = object.get('soundfile',None)
                 else:
                     obstacle = ground.obstacle = object
             if obstacle:
+                if obstacle.shotby:
+                    screen.blit(obstacle.shotby['image'],(ground.pos[0] + ground.size[0] + obstacle.shotby['posbiasx'],ground.pos[1] + obstacle.shotby['posbiasy']))
+                    pass
                 if obstacle.repeats == False:
                     if obstacle.folder:
                         obstacle.animate(obstacle.folder,rate=obstacle.rate,flip = obstacle.flip[0])
-                    obstacle.velocity = (obstacle.vel[0] * dt + ground.velocity[0],obstacle.vel[1] * dt + ground.velocity[1])
+                    obstacle.velocity = (obstacle.vel[0] + ground.velocity[0],obstacle.vel[1] + ground.velocity[1])
                     # print('ground_velocity:',ground.velocity)
                     # print('obstacle_velocity:',obstacle.velocity)
                     obstacle.show()
@@ -371,7 +446,10 @@ class Main:
                         death = True
                 else:
                     obstacle.repeat(obstacle.gap,(ground.pos[1] + obstacle.posbias[1],ground.pos[1] + obstacle.posbias[1]),[ground.pos[0] + ground.size[0] + obstacle.posbias[0],ground.pos[0] + ground.size[0] + obstacle.posbias[0]],player = player,
-                                    positions= (ground.pos[0] + ground.size[0] + obstacle.posbias[0],ground.pos[1] + obstacle.posbias[1]),erase_before=obstacle.erasebefore,velocity = obstacle.vel[0] + ground.velocity[0])
+                                    positions= (ground.pos[0] + ground.size[0] + obstacle.posbias[0],ground.pos[1] + obstacle.posbias[1]),erase_before=obstacle.erasebefore,velocity = obstacle.vel[0] + ground.velocity[0],soundfile=obstacle.soundfile)
+                    if obstacle.till[1] < player.pos[0] and not obstacle.score:
+                        scores += 1
+                        obstacle.score = True
                     if obstacle.collisions and obstacle.damage:
                         pm.display.update()
                         death = True
@@ -379,14 +457,17 @@ class Main:
                     pass
                 if obstacle.shoot:
                     obstacles(screen,obstacle,player,obstacle.shoot,dt = dt)
-        
-        cannon_ball = {'image' : 'cannon_ball.png','size' : (10,10),'posbiasy' : 5,'posbiasx' : -50,'velocityx' : -1,'repeat' : True,'gap' : 300,'erasebefore' : 0,'damage' : True}
-        cannon = {'image' : 'cannon.png','size' : (50,35),'posbiasx' : -50,'posbiasy' : -35,'flipx' : True,'shoot' : [cannon_ball],'repeat' : False}
+        cannon = {'size' : (50,35),'posbiasx' : -50,'posbiasy' : -35,'flipx' : True,'repeat' : False}
+        can_im = pm.transform.flip(pm.transform.scale(pm.image.load('assets/cannon.png').convert_alpha(),cannon['size']),cannon['flipx'],False)
+        cannon['image'] = can_im
+        cannon_ball = {'image' : 'cannon_ball.png','size' : (10,10),'posbiasy' : -30,'posbiasx' : -50,'velocityx' : -3,'repeat' : True,'gap' : 300,'erasebefore' : -800,'damage' : True,'shotby' : cannon,'soundfile' : 'cannon.ogg'}
         spikes = {'image' : 'spikes.png','size' : (204,19),'posbiasy' : -19,'posbiasx' : -504,'damage' : True}
-        fireball = {'image' : 'fireball.png','size' : (10,10),'posbiasy' : 10,'posbiasx' : -25,'velocityx' : -5,'repeat' : True,'gap' : 300,'erasebefore' : 0,'damage' : True}
-        statue = {'image' : 'ancientdog_statue.png','size' : (25,50),'posbiasx' : -25,'posbiasy' : -50,'flipx' : True,'shoot' : [fireball],'repeat' : False}
+        statue = {'size' : (25,50),'posbiasx' : -25,'posbiasy' : -50,'flipx' : True,'repeat' : False}
+        statue_im = pm.transform.flip(pm.transform.scale(pm.image.load('assets/ancientdog_statue.png').convert_alpha(),statue['size']),statue['flipx'],False)
+        statue['image'] = statue_im
+        fireball = {'image' : 'fireball.png','size' : (10,10),'posbiasy' : -40,'posbiasx' : -25,'velocityx' : -4,'repeat' : True,'gap' : 300,'erasebefore' : -800,'damage' : True, 'shotby' : statue,'soundfile' : 'fireball.ogg'}
+        counts = 0 
         obstacle_list = [None]
-        counts = 0
         while True:
             clock.tick(120)
             # print(clock.get_fps())
@@ -394,7 +475,6 @@ class Main:
             dt = (now - prev_time) * 120
             prev_time = now
             if death == False:
-                blocked = False
                 if xvel < 15:
                     xvel += accx * dt
                     dash_vel += accx * dt
@@ -403,9 +483,11 @@ class Main:
                 self.screen.fill((50,50,50))
                 # self.screen.blit(background,(0,0))
                 # ground.show()
+                blocked = False
                 backgrounds,ys = background.repeatperscreen(3 * self._screenwidth,backgrounds,[0,0],6,moveby = ground_vel/6,dt = dt)
                 player.animate('walking',rate = 5,flip = False)
                 player.show()
+                landed = False
                 # player.mask = pm.mask.from_surface(player.image_blit).to_surface()
                 # self.screen.blit(player.mask,player.pos)
                 #grounds = ground.repeat(ground.size[0],(self.screenheight - 200,self.screenheight - 50),[ground_start,self.screenwidth],velocity = ground_vel,erase_before=-1000)
@@ -418,8 +500,10 @@ class Main:
                 self.screen.blit(space,(0,50))
                 self.screen.blit(right,(0,100))
                 self.screen.blit(down,(0,150))
+                self.screen.blit(self.speaker.image_blit,self.speaker.pos)
+
+                MUTE = self.speaker.switch
                 # grounds = self.ground(150,(600,700),1400)
-                landed = False
                 # print(player.velocity[1])
                 if player.velocity[1] >= 0:
                     launched = False
@@ -429,7 +513,7 @@ class Main:
                     player.objects.clear()
                 counts += 1
                 if counts > 15:
-                    obstacle_list = [None,spikes,statue,cannon]
+                    obstacle_list = [None,spikes,cannon_ball,fireball]
                 # for i in range(len(grounds)):
                 #     gr[i] = Assets(self.screen,image = 'land.png',pos = grounds[i],size = (150,100))
                 #     gr[i].show()
@@ -466,8 +550,9 @@ class Main:
                 if player.pos[0] < 150 and blocked == False:
                     player.velocity = (velx,player.velocity[1])
                     ground_vel = 0
+                    player.folder = 'walking'
+                    player.soundfile = 'running.ogg'
                 else:
-                    player.pos = (150,player.pos[1])
                     ground_vel = -velx
                     if blocked:
                         player.folder = 'standing'
@@ -475,11 +560,14 @@ class Main:
                     else:
                         if dash_once == True:
                             player.folder = 'dash'
+                            player.soundfile = 'dash.ogg'
                         else:
                             if slide:
                                 player.folder = 'sliding'
+                                player.soundfile = 'slide.ogg'
                             else:
                                 player.folder = 'walking'
+                                player.soundfile = 'running.ogg'
                         player.velocity = (0,player.velocity[1])
                 # else:
                 #     player.velocity = (0,player.velocity[1])
@@ -494,8 +582,13 @@ class Main:
                 #     player_flip = True
                 # else:
                 #     player.velocity = (0,player.velocity[1])
-                #     player.folder = 'walking'
+                #     player.folder = 'standing'
                 #     ground_vel = 0
+                if (landed or dash_once) and not blocked and player.soundfile == player.prev_soundfile and not death:
+                    if not self.landed_sound.get_busy() and not MUTE:
+                        self.landed_sound.play(player.sound)
+                else:
+                    self.landed_sound.stop()
                 if player.pos[1] > self.screenheight:
                     death = True
                 # if dash == True:
@@ -524,6 +617,8 @@ class Main:
                     elif event.type == pm.KEYUP:
                         if event.key == pm.K_DOWN:
                             slide = False
+                    if event.type == MOUSEBUTTONDOWN:
+                        self.speaker.change_switch()
                 if scores > highscore:
                     highscore = scores
             else:
@@ -532,10 +627,13 @@ class Main:
                 #         file.write(str(scores))
                 game_over = pm.transform.scale(Font.render('GAME OVER',True,(122,0,0)),(500,250))
                 self.screen.blit(game_over,(self._screenwidth/2 - game_over.get_width()/2,self._screenheight/2 - game_over.get_height()/2))
+                self.screen.blit(play_again,(self._screenwidth/2 - play_again.get_width()/2,self._screenheight/2 + game_over.get_height()/2))
                 pm.display.update()
                 run = True
                 for event in pm.event.get():
                     if event.type == MOUSEBUTTONDOWN or event.type == KEYDOWN:
+                        for i in range(64):
+                            pm.mixer.Channel(i).stop()
                         death = False
                         game = Main()
                         return await game.main()
